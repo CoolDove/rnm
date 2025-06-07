@@ -4,6 +4,7 @@ import "core:strings"
 import "core:fmt"
 import "core:mem"
 import "core:os"
+import "core:strconv"
 import "core:text/regex"
 import "core:text/edit"
 import "core:path/filepath"
@@ -23,6 +24,8 @@ msg : strings.Builder
 
 ed_pattern, ed_replace : edit.State
 sb_pattern, sb_replace : strings.Builder
+
+current_edit : ^edit.State
 
 InputEvent :: union {
 	InputEventKey,
@@ -86,6 +89,8 @@ main :: proc() {
 	edit.begin(&ed_pattern, 36, &sb_pattern); defer edit.end(&ed_pattern)
 	edit.begin(&ed_replace, 37, &sb_replace); defer edit.end(&ed_replace)
 
+	current_edit = &ed_pattern
+
 	running := true
 	strings.builder_init(&msg); defer strings.builder_destroy(&msg)
 
@@ -104,6 +109,7 @@ main :: proc() {
 
 	draw()
 	for running {
+		free_all(context.temp_allocator)
 		{
 			n_events : win32.DWORD
 			events : [32]win32.INPUT_RECORD
@@ -113,7 +119,7 @@ main :: proc() {
 				escape : [32]u8
 				escaping : int
 				for e in events {
-					if e.EventType == .KEY_EVENT {
+					if e.EventType == .KEY_EVENT && e.Event.KeyEvent.bKeyDown {
 						ascii := cast(u8)e.Event.KeyEvent.uChar.AsciiChar 
 						unicd := cast(rune)e.Event.KeyEvent.uChar.UnicodeChar
 						if ascii == '\x1b' || escaping > 0 {
@@ -161,7 +167,7 @@ main :: proc() {
 			case InputEventEscape:
 				escape := string(v.buffer[:v.length])
 				if escape == "\x1b[3~" {// delete
-					edit.delete_to(&ed_pattern, .Right)
+					edit.delete_to(current_edit, .Right)
 				} else if escape == "\x1b" {
 					// nothing
 				} else {
@@ -170,46 +176,50 @@ main :: proc() {
 			case InputEventKey:
 				kinput := v
 				if kinput.vk == win32.VK_LEFT && kinput.mod == 0 {
-					edit.move_to(&ed_pattern, .Left)
+					edit.move_to(current_edit, .Left)
 				} else if kinput.vk == win32.VK_RIGHT && kinput.mod == 0 {
-					edit.move_to(&ed_pattern, .Right)
+					edit.move_to(current_edit, .Right)
 				} else if kinput.vk == win32.VK_LEFT && kinput.mod == 1 {
-					edit.move_to(&ed_pattern, .Word_Left)
+					edit.move_to(current_edit, .Word_Left)
 				} else if kinput.vk == win32.VK_RIGHT && kinput.mod == 1 {
-					edit.move_to(&ed_pattern, .Word_Right)
+					edit.move_to(current_edit, .Word_Right)
 				} else if kinput.vk == win32.VK_HOME && kinput.mod == 0 {
-					edit.move_to(&ed_pattern, .Start)
+					edit.move_to(current_edit, .Start)
 				} else if kinput.vk == win32.VK_END && kinput.mod == 0 {
-					edit.move_to(&ed_pattern, .End)
+					edit.move_to(current_edit, .End)
 				}
 			case InputEventChar:
 				char := v
 				if char > 31 && char < 127 {
-					edit.input_rune(&ed_pattern, char)
+					edit.input_rune(current_edit, char)
 				} else {
 					if char == CTRL_Q || char == CTRL_X || char == CTRL_C {
 						running = false
 						break
-					}
-					if char == BKSPC {// backspace
-						edit.delete_to(&ed_pattern, .Left)
+					} else if char == BKSPC {// backspace
+						edit.delete_to(current_edit, .Left)
 					} else if char == CTRL_U {
-						edit.delete_to(&ed_pattern, .Start)
+						edit.delete_to(current_edit, .Start)
 					} else if char == CTRL_K {
-						edit.delete_to(&ed_pattern, .End)
+						edit.delete_to(current_edit, .End)
 					} else if char == CTRL_W {
-						edit.delete_to(&ed_pattern, .Word_Left)
+						edit.delete_to(current_edit, .Word_Left)
 					} else if char == CTRL_Z {
-						edit.perform_command(&ed_pattern, .Undo)
+						edit.perform_command(current_edit, .Undo)
 					} else if char == CTRL_Y {
-						edit.perform_command(&ed_pattern, .Redo)
+						edit.perform_command(current_edit, .Redo)
 					} else if char == CTRL_E {
-						edit.input_text(&ed_pattern, "()")
-						edit.move_to(&ed_pattern, .Left)
-					} else if char == ARW_LEFT {
-						edit.move_to(&ed_pattern, .Left)
-					} else if char == ARW_RIGHT {
-						edit.move_to(&ed_pattern, .Right)
+						edit.input_text(current_edit, "()")
+						edit.move_to(current_edit, .Left)
+					} else if char == TAB {// TAB
+						if current_edit == &ed_pattern do current_edit = &ed_replace
+						else if current_edit == &ed_replace do current_edit = &ed_pattern
+						else {
+							set_msgf("\x1b[31mERR: current edit is nil\x1b[39m")
+							current_edit = &ed_pattern
+						}
+					} else {
+						// set_msgf("invisible char: %d", char)
 					}
 				}
 			}
@@ -224,23 +234,11 @@ draw :: proc() {
 
 	fmt.printf(ERASE_LINE)
 	fmt.printf("@ {}\n", strings.to_string(msg))
-	fmt.printf(ERASE_LINE)
-	fmt.print("> ")
-	if len(input) > 0 {// draw the text
-		slc := ed_pattern.selection
-		if slc.x == slc.y {
-			fmt.printf("\x1b[49m\x1b[39m{}", input[:slc.x])
-			if slc.x == len(input) {
-				fmt.print("\x1b[42m\x1b[30m \x1b[39m\x1b[49m")
-			} else {
-				fmt.printf("\x1b[42m\x1b[30m{}\x1b[39m\x1b[49m", rune(input[slc.x]))
-				if slc.x < len(input)-1 do fmt.print(input[slc.x+1:])
-			}
-		}
-	} else {
-		fmt.print("\x1b[42m\x1b[30m \x1b[39m\x1b[49m")
-	}
-	fmt.print('\n')
+
+	_draw_edit(&ed_pattern, current_edit == &ed_pattern)
+	_draw_edit(&ed_replace, current_edit == &ed_replace)
+
+	fmt.print("---------------------------------------\n")
 
 	regx, regx_err := regex.create(input, {.Unicode, .Case_Insensitive})
 	defer regex.destroy_regex(regx)
@@ -260,10 +258,37 @@ draw :: proc() {
 					for c, idx in soa_zip(pos=capture.pos, group=capture.groups) {
 						if idx == 0 do continue
 						for i in 0..<c.pos.x do fmt.print("\x1b[C")
-						fmt.printf("\x1b[35m{}", c.group)
+						fmt.printf("\x1b[3{}m{}", (idx-1+5)%6+1, c.group)
 						fmt.printf(RESTORE_CURSOR)
 					}
-					fmt.printf("\x1b[%d%s (captures: {})\n", len(file)+1, ansi.CUF, capture.groups[1:])
+					// ** replace
+					sb : strings.Builder
+					strings.builder_init(&sb); defer strings.builder_destroy(&sb)
+					replacer := strings.to_string(ed_replace.builder^)
+					idx := 0
+					for idx<len(replacer) {
+						using strings
+						replaced : bool
+						if replacer[idx] == '\\' && idx+1<len(replacer) {
+							d := replacer[idx+1]
+							if d <= '9' && d > '0' {
+								value := int(d)-48
+								if value < len(capture.groups) {
+									write_string(&sb, capture.groups[value])
+									replaced = true
+									idx += 1
+								}
+							} else if d == '\\' {
+								write_byte(&sb, '\\')
+								idx += 1
+							}
+						}
+						if !replaced {
+							write_byte(&sb, replacer[idx])
+						}
+						idx += 1
+					}
+					fmt.printf("\x1b[%d%s -> \x1b[33m{}\x1b[39m\n", len(file)+1, ansi.CUF, strings.to_string(sb))
 				} else {
 					fmt.printf(" \x1b[39m{}\n", files[h])
 				}
@@ -274,8 +299,34 @@ draw :: proc() {
 			fmt.printf("\x1b[39m\n")
 		}
 	}
-	fmt.printf("\x1b[%dA", HEIGHT+2)
+	fmt.printf("\x1b[%dA", HEIGHT+4)
 	fmt.printf("\x1b[0G") // return to the start
+
+	_draw_edit :: proc(te: ^edit.State, active: bool) {
+		str : string
+		if te.builder != nil do str = strings.to_string(te.builder^)
+		fmt.printf(ERASE_LINE)
+		if active {
+			fmt.print("> ")
+			if len(str) > 0 {// draw the text
+				slc := te.selection
+				if slc.x == slc.y {
+					fmt.printf("\x1b[49m\x1b[39m{}", str[:slc.x])
+					if slc.x == len(str) {
+						fmt.print("\x1b[42m\x1b[30m \x1b[39m\x1b[49m")
+					} else {
+						fmt.printf("\x1b[42m\x1b[30m{}\x1b[39m\x1b[49m", rune(str[slc.x]))
+						if slc.x < len(str)-1 do fmt.print(str[slc.x+1:])
+					}
+				}
+			} else {
+				fmt.print("\x1b[42m\x1b[30m \x1b[39m\x1b[49m")
+			}
+			fmt.print("\n")
+		} else {
+			fmt.printf("\x1b[49m\x1b[39m> {}\n", str)
+		}
+	}
 }
 
 ESC :: 0x1b
@@ -288,12 +339,8 @@ CTRL_U :rune: 'U' - 0x40
 CTRL_Z :rune: 'Z' - 0x40
 CTRL_Y :rune: 'Y' - 0x40
 CTRL_K :rune: 'K' - 0x40
+TAB :rune: 9
 
 CTRL_E :rune: 'E' - 0x40
-
-ARW_UP    :rune: 65
-ARW_DOWN  :rune: 66
-ARW_RIGHT :rune: 67
-ARW_LEFT  :rune: 68
 
 BKSPC :rune: 127

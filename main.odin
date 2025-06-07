@@ -187,6 +187,8 @@ main :: proc() {
 					edit.move_to(current_edit, .Start)
 				} else if kinput.vk == win32.VK_END && kinput.mod == 0 {
 					edit.move_to(current_edit, .End)
+				} else if (kinput.vk == win32.VK_UP || kinput.vk == win32.VK_DOWN) && kinput.mod == 0 {
+					switch_edit()
 				}
 			case InputEventChar:
 				char := v
@@ -212,12 +214,7 @@ main :: proc() {
 						edit.input_text(current_edit, "()")
 						edit.move_to(current_edit, .Left)
 					} else if char == TAB {// TAB
-						if current_edit == &ed_pattern do current_edit = &ed_replace
-						else if current_edit == &ed_replace do current_edit = &ed_pattern
-						else {
-							set_msgf("\x1b[31mERR: current edit is nil\x1b[39m")
-							current_edit = &ed_pattern
-						}
+						switch_edit()
 					} else {
 						// set_msgf("invisible char: %d", char)
 					}
@@ -227,6 +224,15 @@ main :: proc() {
 		draw()
 	}
 	console_end()
+}
+
+switch_edit :: proc() {
+	if current_edit == &ed_pattern do current_edit = &ed_replace
+	else if current_edit == &ed_replace do current_edit = &ed_pattern
+	else {
+		set_msgf("\x1b[31mERR: current edit is nil\x1b[39m")
+		current_edit = &ed_pattern
+	}
 }
 
 draw :: proc() {

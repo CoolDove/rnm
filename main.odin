@@ -25,6 +25,23 @@ msg : strings.Builder
 ed_pattern, ed_replace : edit.State
 sb_pattern, sb_replace : strings.Builder
 
+InputEvent :: union {
+	InputEventKey,
+	InputEventChar,
+	InputEventEscape,
+}
+InputEventEscape :: struct {
+	buffer : [32]u8,
+	length : int,
+}
+InputEventKey :: struct {
+	vk  : int,
+	mod : u8, // ctrl | shift | alt
+}
+InputEventChar :: rune
+
+read_buffer : [dynamic]InputEvent
+
 set_msgf :: proc(fmtstr: string, args: ..any, location := #caller_location) {
 	strings.builder_reset(&msg)
 	if len(args)>0 do strings.write_string(&msg, fmt.tprintf(fmtstr, ..args))
@@ -56,9 +73,10 @@ main :: proc() {
 
 	fmt.print(ansi.CSI + ansi.DECTCEM_HIDE); defer fmt.print(ansi.CSI + ansi.DECTCEM_SHOW)
 
-
 	// init datas
 	files = make([dynamic]string); defer delete(files)
+
+	read_buffer = make([dynamic]InputEvent, 0, 64); defer delete(read_buffer)
 
 	strings.builder_init(&sb_pattern); defer strings.builder_destroy(&sb_pattern)
 	edit.init(&ed_pattern, context.allocator, context.allocator); defer edit.destroy(&ed_pattern)
@@ -87,38 +105,106 @@ main :: proc() {
 
 	draw()
 	for running {
-		buf : [8]u8
-		buf[1] = 0
-		n_read, err := os.read(os.stdin, buf[:])
-
-		set_msgf("key: {}, {}", string(buf[:n_read]), buf[:n_read])
-		runes := utf8.string_to_runes(cast(string)buf[:n_read]); defer delete(runes)
-
+		{
+			n_events : win32.DWORD
+			events : [32]win32.INPUT_RECORD
+			if win32.ReadConsoleInputW(cast(win32.HANDLE)os.stdin, &events[0], 32, &n_events) {
+				clear(&read_buffer)
+				events := events[:n_events]
+				escape : [32]u8
+				escaping : int
+				for e in events {
+					if e.EventType == .KEY_EVENT {
+						ascii := cast(u8)e.Event.KeyEvent.uChar.AsciiChar 
+						unicd := cast(rune)e.Event.KeyEvent.uChar.UnicodeChar
+						if ascii == '\x1b' || escaping > 0 {
+							escape[escaping] = ascii
+							escaping += 1
+						} else {
+							append(&read_buffer, unicd)
+						}
+					}
+				}
+				if escaping > 0 {
+					escp := string(escape[:escaping]) 
+					if escp == "\x1b[A" {
+						append(&read_buffer, InputEventKey{ win32.VK_UP, 0 })
+					} else if escp == "\x1b[B" {
+						append(&read_buffer, InputEventKey{ win32.VK_DOWN, 0 })
+					} else if escp == "\x1b[C" {
+						append(&read_buffer, InputEventKey{ win32.VK_RIGHT, 0 })
+					} else if escp == "\x1b[D" {
+						append(&read_buffer, InputEventKey{ win32.VK_LEFT, 0 })
+					} else if escp == "\x1b[1;5A" {
+						append(&read_buffer, InputEventKey{ win32.VK_UP, 1 })
+					} else if escp == "\x1b[1;5B" {
+						append(&read_buffer, InputEventKey{ win32.VK_DOWN, 1 })
+					} else if escp == "\x1b[1;5C" {
+						append(&read_buffer, InputEventKey{ win32.VK_RIGHT, 1 })
+					} else if escp == "\x1b[1;5D" {
+						append(&read_buffer, InputEventKey{ win32.VK_LEFT, 1 })
+					} else if escp == "\x1b[H" {
+						append(&read_buffer, InputEventKey{ win32.VK_HOME, 0 })
+					} else if escp == "\x1b[F" {
+						append(&read_buffer, InputEventKey{ win32.VK_END, 0 })
+					} else {
+						set_msgf("unrecognized escape: {}", string(escape[1:escaping]))
+						append(&read_buffer, InputEventEscape{escape, escaping})
+					}
+				}
+			}
+		}
 		edit.update_time(&ed_pattern)
 		edit.update_time(&ed_replace)
 
-		key : rune
-		for char in runes {
-			if char > 31 && char != 127 {
-				edit.input_rune(&ed_pattern, char)
-				// set_msgf("input rune, {}", ed_pattern.builder)
-			} else {
-				if char == CTRL_Q || char == CTRL_X || char == CTRL_C {
-					running = false
-					break
+		inputs := read_buffer[:]
+		for input in inputs {
+			switch &v in input {
+			case InputEventEscape:
+				escape := string(v.buffer[:v.length])
+				set_msgf("ansi escape: {}", escape[1:])
+			case InputEventKey:
+				kinput := v
+				if kinput.vk == win32.VK_LEFT && kinput.mod == 0 {
+					edit.move_to(&ed_pattern, .Left)
+				} else if kinput.vk == win32.VK_RIGHT && kinput.mod == 0 {
+					edit.move_to(&ed_pattern, .Right)
+				} else if kinput.vk == win32.VK_LEFT && kinput.mod == 1 {
+					edit.move_to(&ed_pattern, .Word_Left)
+				} else if kinput.vk == win32.VK_RIGHT && kinput.mod == 1 {
+					edit.move_to(&ed_pattern, .Word_Right)
+				} else if kinput.vk == win32.VK_HOME && kinput.mod == 0 {
+					edit.move_to(&ed_pattern, .Start)
+				} else if kinput.vk == win32.VK_END && kinput.mod == 0 {
+					edit.move_to(&ed_pattern, .End)
 				}
-				if char == 127 {// backspace
-					edit.delete_to(&ed_pattern, .Left)
-				} else if char == CTRL_U {
-					edit.delete_to(&ed_pattern, .Start)
-				} else if char == CTRL_W {
-					edit.delete_to(&ed_pattern, .Word_Left)
-				} else if char == CTRL_N {
-					edit.perform_command(&ed_pattern, .Undo)
-				} else if char == CTRL_Y {
-					edit.perform_command(&ed_pattern, .Redo)
+			case InputEventChar:
+				char := v
+				if char > 31 && char < 127 {
+					edit.input_rune(&ed_pattern, char)
+				} else {
+					if char == CTRL_Q || char == CTRL_X || char == CTRL_C {
+						running = false
+						break
+					}
+					if char == BKSPC {// backspace
+						edit.delete_to(&ed_pattern, .Left)
+					} else if char == CTRL_U {
+						edit.delete_to(&ed_pattern, .Start)
+					} else if char == CTRL_K {
+						edit.delete_to(&ed_pattern, .End)
+					} else if char == CTRL_W {
+						edit.delete_to(&ed_pattern, .Word_Left)
+					} else if char == CTRL_Z {
+						edit.perform_command(&ed_pattern, .Undo)
+					} else if char == CTRL_Y {
+						edit.perform_command(&ed_pattern, .Redo)
+					} else if char == ARW_LEFT {
+						edit.move_to(&ed_pattern, .Left)
+					} else if char == ARW_RIGHT {
+						edit.move_to(&ed_pattern, .Right)
+					}
 				}
-				key = char
 			}
 		}
 		draw()
@@ -127,20 +213,31 @@ main :: proc() {
 }
 
 draw :: proc() {
-	// input := strings.to_string(input_buffer)
-	input : string
-	if ed_pattern.builder != nil do input = strings.to_string(sb_pattern)
+	input := strings.to_string(sb_pattern)
 
 	fmt.printf(ERASE_LINE)
 	fmt.printf("@ {}\n", strings.to_string(msg))
 	fmt.printf(ERASE_LINE)
-	fmt.printf("> {}\x1b[42m \x1b[49m\n", input)
+	fmt.print("> ")
+	if len(input) > 0 {// draw the text
+		slc := ed_pattern.selection
+		if slc.x == slc.y {
+			fmt.printf("\x1b[49m\x1b[39m{}", input[:slc.x])
+			if slc.x == len(input) {
+				fmt.print("\x1b[42m\x1b[30m \x1b[39m\x1b[49m")
+			} else {
+				fmt.printf("\x1b[42m\x1b[30m{}\x1b[39m\x1b[49m", rune(input[slc.x]))
+				if slc.x < len(input)-1 do fmt.print(input[slc.x+1:])
+			}
+		}
+	} else {
+		fmt.print("\x1b[42m\x1b[30m \x1b[39m\x1b[49m")
+	}
+	fmt.print('\n')
 
 	regx, regx_err := regex.create(input, {.Unicode, .Case_Insensitive})
 	defer regex.destroy_regex(regx)
 
-	sb : strings.Builder
-	strings.builder_init(&sb); defer strings.builder_destroy(&sb)
 	for h in 0..<HEIGHT {
 		fmt.printf(ERASE_LINE)// erase line
 		if h < len(files) {
@@ -155,7 +252,7 @@ draw :: proc() {
 					fmt.print(RESTORE_CURSOR)
 					for c, idx in soa_zip(pos=capture.pos, group=capture.groups) {
 						for i in 0..<c.pos.x do fmt.print("\x1b[C")
-						fmt.printf("\x1b[33m{}", c.group)
+						fmt.printf("\x1b[35m{}", c.group)
 						fmt.printf(RESTORE_CURSOR)
 					}
 					fmt.printf("\x1b[%d%s  (capture {} groups: {})\n", len(file)+1, ansi.CUF, len(capture.pos), soa_zip(pos=capture.pos, group=capture.groups))
@@ -180,5 +277,13 @@ CTRL_X :rune: 'X' - 0x40
 CTRL_Q :rune: 'Q' - 0x40
 CTRL_W :rune: 'W' - 0x40
 CTRL_U :rune: 'U' - 0x40
-CTRL_N :rune: 'N' - 0x40
+CTRL_Z :rune: 'Z' - 0x40
 CTRL_Y :rune: 'Y' - 0x40
+CTRL_K :rune: 'K' - 0x40
+
+ARW_UP    :rune: 65
+ARW_DOWN  :rune: 66
+ARW_RIGHT :rune: 67
+ARW_LEFT  :rune: 68
+
+BKSPC :rune: 127

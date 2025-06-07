@@ -36,4 +36,3 @@ console_end :: proc() {
 	SetConsoleCP(prev_in_cp)
 	SetConsoleOutputCP(prev_out_cp)
 }
-

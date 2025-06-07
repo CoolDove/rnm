@@ -20,7 +20,6 @@ RESTORE_CURSOR :: ansi.CSI + ansi.RCP
 ERASE_LINE     :: ansi.CSI+ansi.EL
 
 msg : strings.Builder
-// input_buffer : strings.Builder // gap buffer this
 
 ed_pattern, ed_replace : edit.State
 sb_pattern, sb_replace : strings.Builder
@@ -199,6 +198,9 @@ main :: proc() {
 						edit.perform_command(&ed_pattern, .Undo)
 					} else if char == CTRL_Y {
 						edit.perform_command(&ed_pattern, .Redo)
+					} else if char == CTRL_E {
+						edit.input_text(&ed_pattern, "()")
+						edit.move_to(&ed_pattern, .Left)
 					} else if char == ARW_LEFT {
 						edit.move_to(&ed_pattern, .Left)
 					} else if char == ARW_RIGHT {
@@ -246,16 +248,17 @@ draw :: proc() {
 				capture, ok := regex.match(regx, file)
 				defer regex.destroy_capture(capture)
 				if ok && len(input) > 0 {
-					fmt.print(' ')
+					fmt.print("\x1b[44m*\x1b[49m")
 					fmt.printf(SAVE_CURSOR)
 					fmt.printf("\x1b[39m{}", file)
 					fmt.print(RESTORE_CURSOR)
 					for c, idx in soa_zip(pos=capture.pos, group=capture.groups) {
+						if idx == 0 do continue
 						for i in 0..<c.pos.x do fmt.print("\x1b[C")
 						fmt.printf("\x1b[35m{}", c.group)
 						fmt.printf(RESTORE_CURSOR)
 					}
-					fmt.printf("\x1b[%d%s  (capture {} groups: {})\n", len(file)+1, ansi.CUF, len(capture.pos), soa_zip(pos=capture.pos, group=capture.groups))
+					fmt.printf("\x1b[%d%s (captures: {})\n", len(file)+1, ansi.CUF, capture.groups[1:])
 				} else {
 					fmt.printf(" \x1b[39m{}\n", files[h])
 				}
@@ -280,6 +283,8 @@ CTRL_U :rune: 'U' - 0x40
 CTRL_Z :rune: 'Z' - 0x40
 CTRL_Y :rune: 'Y' - 0x40
 CTRL_K :rune: 'K' - 0x40
+
+CTRL_E :rune: 'E' - 0x40
 
 ARW_UP    :rune: 65
 ARW_DOWN  :rune: 66

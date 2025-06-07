@@ -15,6 +15,7 @@ HEIGHT :: 20
 
 SAVE_CURSOR    :: ansi.CSI + ansi.SCP
 RESTORE_CURSOR :: ansi.CSI + ansi.RCP
+ERASE_LINE     :: ansi.CSI+ansi.EL
 
 msg : strings.Builder
 input_buffer : strings.Builder // gap buffer this
@@ -103,9 +104,9 @@ main :: proc() {
 draw :: proc() {
 	input := strings.to_string(input_buffer)
 
-	fmt.printf(ansi.CSI+ansi.EL)
+	fmt.printf(ERASE_LINE)
 	fmt.printf("@ {}\n", strings.to_string(msg))
-	fmt.printf(ansi.CSI+ansi.EL)
+	fmt.printf(ERASE_LINE)
 	fmt.printf("> {}\x1b[42m \x1b[49m\n", input)
 
 	regx, regx_err := regex.create(input, {.Unicode, .Case_Insensitive})
@@ -114,13 +115,23 @@ draw :: proc() {
 	sb : strings.Builder
 	strings.builder_init(&sb); defer strings.builder_destroy(&sb)
 	for h in 0..<HEIGHT {
+		fmt.printf(ERASE_LINE)// erase line
 		if h < len(files) {
 			file := files[h]
 			if regx_err == nil {
 				capture, ok := regex.match(regx, file)
 				defer regex.destroy_capture(capture)
 				if ok && len(input) > 0 {
-					fmt.printf(" \x1b[33m{}\n", files[h])
+					fmt.print(' ')
+					fmt.printf(SAVE_CURSOR)
+					fmt.printf("\x1b[39m{}", file)
+					fmt.print(RESTORE_CURSOR)
+					for c, idx in soa_zip(pos=capture.pos, group=capture.groups) {
+						for i in 0..<c.pos.x do fmt.print("\x1b[C")
+						fmt.printf("\x1b[33m{}", c.group)
+						fmt.printf(RESTORE_CURSOR)
+					}
+					fmt.printf("\x1b[%d%s  (capture {} groups: {})\n", len(file)+1, ansi.CUF, len(capture.pos), soa_zip(pos=capture.pos, group=capture.groups))
 				} else {
 					fmt.printf(" \x1b[39m{}\n", files[h])
 				}

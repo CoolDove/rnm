@@ -147,7 +147,6 @@ main :: proc() {
 					} else if escp == "\x1b[F" {
 						append(&read_buffer, InputEventKey{ win32.VK_END, 0 })
 					} else {
-						set_msgf("unrecognized escape: {}", string(escape[1:escaping]))
 						append(&read_buffer, InputEventEscape{escape, escaping})
 					}
 				}
@@ -161,7 +160,13 @@ main :: proc() {
 			switch &v in input {
 			case InputEventEscape:
 				escape := string(v.buffer[:v.length])
-				set_msgf("ansi escape: {}", escape[1:])
+				if escape == "\x1b[3~" {// delete
+					edit.delete_to(&ed_pattern, .Right)
+				} else if escape == "\x1b" {
+					// nothing
+				} else {
+					set_msgf("ansi escape: {} ({})", string(escape[1:]), escape)
+				}
 			case InputEventKey:
 				kinput := v
 				if kinput.vk == win32.VK_LEFT && kinput.mod == 0 {

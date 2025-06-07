@@ -2,8 +2,10 @@ package main
 
 import "core:strings"
 import "core:fmt"
+import "core:mem"
 import "core:os"
 import "core:text/regex"
+import "core:text/edit"
 import "core:path/filepath"
 import "core:unicode/utf8"
 import "core:unicode/utf16"
@@ -18,25 +20,54 @@ RESTORE_CURSOR :: ansi.CSI + ansi.RCP
 ERASE_LINE     :: ansi.CSI+ansi.EL
 
 msg : strings.Builder
-input_buffer : strings.Builder // gap buffer this
+// input_buffer : strings.Builder // gap buffer this
 
-set_msgf :: proc(fmtstr: string, args: ..any) {
+ed_pattern, ed_replace : edit.State
+sb_pattern, sb_replace : strings.Builder
+
+set_msgf :: proc(fmtstr: string, args: ..any, location := #caller_location) {
 	strings.builder_reset(&msg)
-	strings.write_string(&msg, fmt.tprintf(fmtstr, args))
+	if len(args)>0 do strings.write_string(&msg, fmt.tprintf(fmtstr, ..args))
+	else do strings.write_string(&msg, fmtstr)
+	strings.write_string(&msg, fmt.tprintf("\t\x1b[34m{}\x1b[39m", location))
 }
 
 files : [dynamic]string
 
 main :: proc() {
+	when ODIN_DEBUG {
+		track: mem.Tracking_Allocator
+		mem.tracking_allocator_init(&track, context.allocator)
+		context.allocator = mem.tracking_allocator(&track)
+
+		defer {
+			if len(track.allocation_map) > 0 {
+				fmt.eprintf("=== %v allocations not freed: ===\n", len(track.allocation_map))
+				for _, entry in track.allocation_map {
+					fmt.eprintf("- %v bytes @ %v\n", entry.size, entry.location)
+				}
+			}
+			mem.tracking_allocator_destroy(&track)
+		}
+	}
+
 	console_begin()
 	defer console_end()
+
 	fmt.print(ansi.CSI + ansi.DECTCEM_HIDE); defer fmt.print(ansi.CSI + ansi.DECTCEM_SHOW)
 
-	strings.builder_init(&input_buffer)
-	defer strings.builder_destroy(&input_buffer)
+
+	// init datas
 	files = make([dynamic]string); defer delete(files)
 
-	fmt.print(SAVE_CURSOR); defer fmt.print(RESTORE_CURSOR)
+	strings.builder_init(&sb_pattern); defer strings.builder_destroy(&sb_pattern)
+	edit.init(&ed_pattern, context.allocator, context.allocator); defer edit.destroy(&ed_pattern)
+
+	strings.builder_init(&sb_replace); defer strings.builder_destroy(&sb_replace)
+	edit.init(&ed_replace, context.allocator, context.allocator); defer edit.destroy(&ed_replace)
+
+	edit.begin(&ed_pattern, 36, &sb_pattern); defer edit.end(&ed_pattern)
+	edit.begin(&ed_replace, 37, &sb_replace); defer edit.end(&ed_replace)
 
 	running := true
 	strings.builder_init(&msg); defer strings.builder_destroy(&msg)
@@ -48,50 +79,44 @@ main :: proc() {
 			append(&files, i.name)
 		}
 	}
+	defer {
+		for i in fis {
+			os.file_info_delete(i)
+		}
+	}
 
 	draw()
 	for running {
 		buf : [8]u8
 		buf[1] = 0
 		n_read, err := os.read(os.stdin, buf[:])
+
+		set_msgf("key: {}, {}", string(buf[:n_read]), buf[:n_read])
 		runes := utf8.string_to_runes(cast(string)buf[:n_read]); defer delete(runes)
+
+		edit.update_time(&ed_pattern)
+		edit.update_time(&ed_replace)
 
 		key : rune
 		for char in runes {
 			if char > 31 && char != 127 {
-				strings.write_rune(&input_buffer, char)
+				edit.input_rune(&ed_pattern, char)
+				// set_msgf("input rune, {}", ed_pattern.builder)
 			} else {
 				if char == CTRL_Q || char == CTRL_X || char == CTRL_C {
 					running = false
 					break
 				}
 				if char == 127 {// backspace
-					if strings.builder_len(input_buffer) > 0 {
-						str := strings.to_string(input_buffer)
-						r, size := utf8.decode_last_rune_in_string(str)
-						for i in 0..<size do pop(&input_buffer.buf)
-						set_msgf("delete {} bytes.", size)
-					}
+					edit.delete_to(&ed_pattern, .Left)
 				} else if char == CTRL_U {
-					strings.builder_reset(&input_buffer)
+					edit.delete_to(&ed_pattern, .Start)
 				} else if char == CTRL_W {
-					if strings.builder_len(input_buffer) > 0 {
-						str := strings.to_string(input_buffer)
-						deleted := 0
-						confirm : bool
-						for {
-							r, size := utf8.decode_last_rune_in_string(str[:len(str)-deleted])
-							if size == 0 || deleted >= len(str) do break
-							if r == ' ' {
-								if confirm do break
-							} else do confirm = true
-							deleted += size
-						}
-						for d in 0..<deleted {
-							pop(&input_buffer.buf)
-						}
-						set_msgf("delete {} bytes.", deleted)
-					}
+					edit.delete_to(&ed_pattern, .Word_Left)
+				} else if char == CTRL_N {
+					edit.perform_command(&ed_pattern, .Undo)
+				} else if char == CTRL_Y {
+					edit.perform_command(&ed_pattern, .Redo)
 				}
 				key = char
 			}
@@ -102,7 +127,9 @@ main :: proc() {
 }
 
 draw :: proc() {
-	input := strings.to_string(input_buffer)
+	// input := strings.to_string(input_buffer)
+	input : string
+	if ed_pattern.builder != nil do input = strings.to_string(sb_pattern)
 
 	fmt.printf(ERASE_LINE)
 	fmt.printf("@ {}\n", strings.to_string(msg))
@@ -148,8 +175,10 @@ draw :: proc() {
 
 ESC :: 0x1b
 
-CTRL_C :: 'C' - 0x40
-CTRL_X :: 'X' - 0x40
-CTRL_Q :: 'Q' - 0x40
-CTRL_W :: 'W' - 0x40
-CTRL_U :: 'U' - 0x40
+CTRL_C :rune: 'C' - 0x40
+CTRL_X :rune: 'X' - 0x40
+CTRL_Q :rune: 'Q' - 0x40
+CTRL_W :rune: 'W' - 0x40
+CTRL_U :rune: 'U' - 0x40
+CTRL_N :rune: 'N' - 0x40
+CTRL_Y :rune: 'Y' - 0x40

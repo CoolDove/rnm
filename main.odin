@@ -306,7 +306,7 @@ main :: proc() {
 						switch_edit()
 						visual_dirty = true
 					} else {
-						set_msgf("invisible char: %d", char)
+						// set_msgf("invisible char: %d", char)
 						visual_dirty = true
 					}
 				}
@@ -356,7 +356,7 @@ draw_flush :: proc() {
 		fmt.print(ERASE_LINE)
 		if i < HEIGHT-BARS-1 do fmt.print('\n')
 	}
-	fmt.printf("\x1b[{}A", HEIGHT-4)
+	fmt.printf("\x1b[{}A", HEIGHT-BARS-1)
 }
 draw :: proc() {
 	input := strings.to_string(sb_pattern)
@@ -365,6 +365,7 @@ draw :: proc() {
 	fmt.printf("@ {}\n", strings.to_string(msg))
 	_draw_edit(&ed_pattern, current_edit == &ed_pattern, 'P')
 	_draw_edit(&ed_replace, current_edit == &ed_replace, 'R')
+	fmt.print(ERASE_LINE)
 	fmt.print("────────────────────────────────────────────\n")
 
 	for h in 0..<(HEIGHT-BARS) {

@@ -6,6 +6,7 @@ import "core:mem"
 import "core:sort"
 import "core:os"
 import "core:strconv"
+import "core:math"
 import "core:text/regex"
 import "core:text/edit"
 import "core:path/filepath"
@@ -15,7 +16,10 @@ import "core:terminal/ansi"
 
 import win32 "core:sys/windows"
 
-HEIGHT :: 20
+WIDTH  := 100
+HEIGHT := 20
+
+BARS := 4 // the height of bars
 
 SAVE_CURSOR    :: ansi.CSI + ansi.SCP
 RESTORE_CURSOR :: ansi.CSI + ansi.RCP
@@ -63,6 +67,8 @@ Element :: struct {
 	capture : regex.Capture,
 }
 
+view_offset : int
+
 main :: proc() {
 	when ODIN_DEBUG {
 		track: mem.Tracking_Allocator
@@ -82,6 +88,12 @@ main :: proc() {
 
 	console_begin()
 	defer console_end()
+	{
+		bufinfo : win32.CONSOLE_SCREEN_BUFFER_INFO
+		win32.GetConsoleScreenBufferInfo(cast(win32.HANDLE)os.stdout, &bufinfo)
+		WIDTH = int(bufinfo.dwSize.X)
+		HEIGHT = int(bufinfo.dwSize.Y)
+	}
 
 	fmt.print(ansi.CSI + ansi.DECTCEM_HIDE); defer fmt.print(ansi.CSI + ansi.DECTCEM_SHOW)
 
@@ -132,6 +144,11 @@ main :: proc() {
 						} else {
 							append(&read_buffer, unicd)
 						}
+					} else if e.EventType == .WINDOW_BUFFER_SIZE_EVENT {
+						size := e.Event.WindowBufferSizeEvent.dwSize
+						WIDTH  = int(size.X)
+						HEIGHT = int(size.Y)
+						visual_dirty = true
 					}
 				}
 				if escaping > 0 {
@@ -277,6 +294,14 @@ main :: proc() {
 							edit.move_to(current_edit, .Left)
 						}
 						string_dirty = true
+					} else if char == CTRL_N {
+						view_offset += 1
+						view_offset = math.clamp(view_offset, 0, max(int(len(elements)-HEIGHT+4+2), 0))
+						visual_dirty = true
+					} else if char == CTRL_P {
+						view_offset -= 1
+						view_offset = math.clamp(view_offset, 0, max(int(len(elements)-HEIGHT+4+2), 0))
+						visual_dirty = true
 					} else if char == TAB {// TAB
 						switch_edit()
 						visual_dirty = true
@@ -287,7 +312,10 @@ main :: proc() {
 				}
 			}
 		}
-		if string_dirty do update_elements()
+		if string_dirty {
+			update_elements()
+			view_offset = 0
+		}
 		if visual_dirty || string_dirty do draw()
 		visual_dirty = false
 		string_dirty = false
@@ -324,27 +352,25 @@ switch_edit :: proc() {
 
 draw_flush :: proc() {
 	fmt.printf("\x1b[4B")
-	for i in 0..<HEIGHT {
+	for i in 0..<(HEIGHT-BARS) {
 		fmt.print(ERASE_LINE)
-		fmt.print('\n')
+		if i < HEIGHT-BARS-1 do fmt.print('\n')
 	}
-	fmt.printf("\x1b[{}A", HEIGHT)
+	fmt.printf("\x1b[{}A", HEIGHT-4)
 }
 draw :: proc() {
 	input := strings.to_string(sb_pattern)
 
 	fmt.printf(ERASE_LINE)
 	fmt.printf("@ {}\n", strings.to_string(msg))
-
 	_draw_edit(&ed_pattern, current_edit == &ed_pattern, 'P')
 	_draw_edit(&ed_replace, current_edit == &ed_replace, 'R')
-
 	fmt.print("────────────────────────────────────────────\n")
 
-	for h in 0..<HEIGHT {
+	for h in 0..<(HEIGHT-BARS) {
 		fmt.printf(ERASE_LINE)// erase line
-		if h < len(elements) {
-			elem := elements[h]
+		if h+view_offset < len(elements) {
+			elem := elements[h+view_offset]
 			file := elem.file
 			if elem.matched {
 				fmt.print("\x1b[44m*\x1b[49m")
@@ -361,12 +387,12 @@ draw :: proc() {
 			} else {
 				fmt.printf(" \x1b[39m{}", file)
 			}
-			fmt.print('\n')
 		} else {
-			fmt.printf("\x1b[39m\n")
+			fmt.printf("\x1b[39m")
 		}
+		if h < HEIGHT-BARS-1 do fmt.print('\n')
 	}
-	fmt.printf("\x1b[%dA", HEIGHT+4)
+	fmt.printf("\x1b[%dA", HEIGHT)
 	fmt.printf("\x1b[0G") // return to the start
 
 	_draw_edit :: proc(te: ^edit.State, active: bool, prefix: rune) {
@@ -481,6 +507,9 @@ CTRL_K :rune: 'K' - 0x40
 
 CTRL_H :rune: 'H' - 0x40
 CTRL_L :rune: 'L' - 0x40
+
+CTRL_N :rune: 'N' - 0x40
+CTRL_P :rune: 'P' - 0x40
 
 TAB :rune: 9
 ENTER :rune: 13

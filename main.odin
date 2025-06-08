@@ -3,6 +3,7 @@ package main
 import "core:strings"
 import "core:fmt"
 import "core:mem"
+import "core:sort"
 import "core:os"
 import "core:strconv"
 import "core:text/regex"
@@ -53,6 +54,15 @@ set_msgf :: proc(fmtstr: string, args: ..any, location := #caller_location) {
 
 files : [dynamic]string
 
+elements : [dynamic]Element
+Element :: struct {
+	file : string,
+
+	matched : bool,
+	result : strings.Builder,
+	capture : regex.Capture,
+}
+
 main :: proc() {
 	when ODIN_DEBUG {
 		track: mem.Tracking_Allocator
@@ -75,9 +85,6 @@ main :: proc() {
 
 	fmt.print(ansi.CSI + ansi.DECTCEM_HIDE); defer fmt.print(ansi.CSI + ansi.DECTCEM_SHOW)
 
-	// init datas
-	files = make([dynamic]string); defer delete(files)
-
 	read_buffer = make([dynamic]InputEvent, 0, 64); defer delete(read_buffer)
 
 	strings.builder_init(&sb_pattern); defer strings.builder_destroy(&sb_pattern)
@@ -95,16 +102,11 @@ main :: proc() {
 	strings.builder_init(&msg); defer strings.builder_destroy(&msg)
 
 	hdir, err := os.open(os.get_current_directory(context.temp_allocator))
-	fis, rdir_err := os.read_dir(hdir, 0); defer delete(fis)
-	for i in fis {
-		if !i.is_dir {
-			append(&files, i.name)
-		}
-	}
+	fis, rdir_err := os.read_dir(hdir, 0)
+	for fi in fis do if !fi.is_dir do append(&files, fi.name)
 	defer {
-		for i in fis {
-			os.file_info_delete(i)
-		}
+		for fi in fis do os.file_info_delete(fi)
+		delete(fis)
 	}
 
 	draw()
@@ -213,6 +215,43 @@ main :: proc() {
 					} else if char == CTRL_E {
 						edit.input_text(current_edit, "()")
 						edit.move_to(current_edit, .Left)
+					} else if char == CTRL_H {
+						str := strings.to_string(current_edit.builder^)
+						succ : bool
+						slc := current_edit.selection.y
+						if slc < len(str) {
+							b := str[slc]
+							if b == '(' || b == ')' {
+								edit.delete_to(current_edit, .Right)
+								edit.move_to(current_edit, .Left)
+								edit.input_rune(current_edit, rune(b))
+								edit.move_to(current_edit, .Left)
+								succ = true
+							}
+						}
+						if !succ {
+							edit.input_text(current_edit, "()")
+							edit.move_to(current_edit, .Left)
+							edit.move_to(current_edit, .Left)
+						}
+					} else if char == CTRL_L {
+						str := strings.to_string(current_edit.builder^)
+						succ : bool
+						slc := current_edit.selection.y
+						if slc < len(str) {
+							b := str[slc]
+							if b == '(' || b == ')' {
+								edit.delete_to(current_edit, .Right)
+								edit.move_to(current_edit, .Right)
+								edit.input_rune(current_edit, rune(b))
+								edit.move_to(current_edit, .Left)
+								succ = true
+							}
+						}
+						if !succ {
+							edit.input_text(current_edit, "()")
+							edit.move_to(current_edit, .Left)
+						}
 					} else if char == TAB {// TAB
 						switch_edit()
 					} else {
@@ -221,6 +260,7 @@ main :: proc() {
 				}
 			}
 		}
+		update_elements()
 		draw()
 	}
 	console_end()
@@ -241,66 +281,32 @@ draw :: proc() {
 	fmt.printf(ERASE_LINE)
 	fmt.printf("@ {}\n", strings.to_string(msg))
 
-	_draw_edit(&ed_pattern, current_edit == &ed_pattern)
-	_draw_edit(&ed_replace, current_edit == &ed_replace)
+	_draw_edit(&ed_pattern, current_edit == &ed_pattern, 'P')
+	_draw_edit(&ed_replace, current_edit == &ed_replace, 'R')
 
-	fmt.print("---------------------------------------\n")
-
-	regx, regx_err := regex.create(input, {.Unicode, .Case_Insensitive})
-	defer regex.destroy_regex(regx)
+	fmt.print("────────────────────────────────────────────\n")
 
 	for h in 0..<HEIGHT {
 		fmt.printf(ERASE_LINE)// erase line
-		if h < len(files) {
-			file := files[h]
-			if regx_err == nil {
-				capture, ok := regex.match(regx, file)
-				defer regex.destroy_capture(capture)
-				if ok && len(input) > 0 {
-					fmt.print("\x1b[44m*\x1b[49m")
-					fmt.printf(SAVE_CURSOR)
-					fmt.printf("\x1b[39m{}", file)
-					fmt.print(RESTORE_CURSOR)
-					for c, idx in soa_zip(pos=capture.pos, group=capture.groups) {
-						if idx == 0 do continue
-						for i in 0..<c.pos.x do fmt.print("\x1b[C")
-						fmt.printf("\x1b[3{}m{}", (idx-1+5)%6+1, c.group)
-						fmt.printf(RESTORE_CURSOR)
-					}
-					// ** replace
-					sb : strings.Builder
-					strings.builder_init(&sb); defer strings.builder_destroy(&sb)
-					replacer := strings.to_string(ed_replace.builder^)
-					idx := 0
-					for idx<len(replacer) {
-						using strings
-						replaced : bool
-						if replacer[idx] == '\\' && idx+1<len(replacer) {
-							d := replacer[idx+1]
-							if d <= '9' && d > '0' {
-								value := int(d)-48
-								if value < len(capture.groups) {
-									write_string(&sb, capture.groups[value])
-									replaced = true
-									idx += 1
-								}
-							} else if d == '\\' {
-								write_byte(&sb, '\\')
-								idx += 1
-							}
-						}
-						if !replaced {
-							write_byte(&sb, replacer[idx])
-						}
-						idx += 1
-					}
-					fmt.printf("\x1b[%d%s -> \x1b[33m{}\x1b[39m\n", len(file)+1, ansi.CUF, strings.to_string(sb))
-				} else {
-					fmt.printf(" \x1b[39m{}\n", files[h])
+		if h < len(elements) {
+			elem := elements[h]
+			file := elem.file
+			if elem.matched {
+				fmt.print("\x1b[44m*\x1b[49m")
+				fmt.printf(SAVE_CURSOR)
+				fmt.printf("\x1b[39m{}", file)
+				fmt.print(RESTORE_CURSOR)
+				for c, idx in soa_zip(pos=elem.capture.pos, group=elem.capture.groups) {
+					if idx == 0 do continue
+					for i in 0..<c.pos.x do fmt.print("\x1b[C")
+					fmt.printf("\x1b[3{}m{}", (idx-1+5)%6+1, c.group)
+					fmt.printf(RESTORE_CURSOR)
 				}
+				fmt.printf("\x1b[{}C  ->  {}", len(file), strings.to_string(elem.result))
 			} else {
-				fmt.printf(" \x1b[39m{}\n", files[h])
+				fmt.printf(" \x1b[39m{}", file)
 			}
+			fmt.print('\n')
 		} else {
 			fmt.printf("\x1b[39m\n")
 		}
@@ -308,12 +314,12 @@ draw :: proc() {
 	fmt.printf("\x1b[%dA", HEIGHT+4)
 	fmt.printf("\x1b[0G") // return to the start
 
-	_draw_edit :: proc(te: ^edit.State, active: bool) {
+	_draw_edit :: proc(te: ^edit.State, active: bool, prefix: rune) {
 		str : string
 		if te.builder != nil do str = strings.to_string(te.builder^)
 		fmt.printf(ERASE_LINE)
 		if active {
-			fmt.print("> ")
+			fmt.printf("{} ", prefix)
 			if len(str) > 0 {// draw the text
 				slc := te.selection
 				if slc.x == slc.y {
@@ -330,9 +336,81 @@ draw :: proc() {
 			}
 			fmt.print("\n")
 		} else {
-			fmt.printf("\x1b[49m\x1b[39m> {}\n", str)
+			fmt.printf("\x1b[49m\x1b[39m{} {}\n", prefix, str)
 		}
 	}
+}
+
+update_elements :: proc() {
+	pattern_str := strings.to_string(sb_pattern)
+	replace_str := strings.to_string(sb_replace)
+
+	// clear the old data
+	clear_elements()
+
+	regx, regx_err := regex.create(pattern_str, {.Unicode, .Case_Insensitive})
+	defer regex.destroy_regex(regx)
+
+	n_matched : int
+	for f in files {
+		matched : bool
+		e : Element
+		e.file = f
+		if regx_err == nil && pattern_str != {} {
+			if capture, ok := regex.match(regx, f); ok {
+				e.matched = true
+				e.capture = capture
+				// ** replace
+				sb := &e.result
+				strings.builder_init(sb)//; defer strings.builder_destroy(&sb)
+				replace_str := strings.to_string(ed_replace.builder^)
+				idx := 0
+				for idx<len(replace_str) {
+					using strings
+					replaced : bool
+					if replace_str[idx] == '\\' && idx+1<len(replace_str) {
+						d := replace_str[idx+1]
+						if d <= '9' && d > '0' {
+							value := int(d)-48
+							if value < len(capture.groups) {
+								write_string(sb, capture.groups[value])
+								replaced = true
+								idx += 1
+							}
+						} else if d == '\\' {
+							write_byte(sb, '\\')
+							idx += 1
+						}
+					}
+					if !replaced {
+						write_byte(sb, replace_str[idx])
+					}
+					idx += 1
+				}
+
+				n_matched += 1
+			}
+		}
+		append(&elements, e)
+	}
+	elem_slice := elements[:]
+	sort.quick_sort_proc(elements[:], 
+		proc(a,b: Element) -> int {
+			if a.matched && !b.matched do return -1
+			else if !a.matched && b.matched do return 1
+			else do return 0
+		}
+	)
+}
+
+clear_elements :: proc() {
+	for &e in elements {
+		if e.matched {
+			regex.destroy_capture(e.capture)
+			strings.builder_destroy(&e.result)
+		}
+	}
+	clear(&elements)
 }
 
 ESC :: 0x1b
@@ -345,6 +423,10 @@ CTRL_U :rune: 'U' - 0x40
 CTRL_Z :rune: 'Z' - 0x40
 CTRL_Y :rune: 'Y' - 0x40
 CTRL_K :rune: 'K' - 0x40
+
+CTRL_H :rune: 'H' - 0x40
+CTRL_L :rune: 'L' - 0x40
+
 TAB :rune: 9
 
 CTRL_E :rune: 'E' - 0x40

@@ -9,6 +9,10 @@ Other platforms' support is planned for the future.
 You can then edit the **regex pattern** and **replacement** fields interactively.  
 Press `Enter` to confirm and apply the renaming operation.
 
+In replacement string, use `\1`, `\2`, `\3`... to apply the capture.
+
+![usage](usage.gif)
+
 ### Keys
 
 | Key          | Action                                        |

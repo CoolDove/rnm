@@ -5,25 +5,25 @@ It is written in [Odin Lang](https://odin-lang.org/) and currently supports **Wi
 Other platforms' support is planned for the future.
 
 ## Usage
-Simply run:
-`rnm`
 
-You can then edit the **pattern** (regex) and **replacement** fields interactively.  
+You can then edit the **regex pattern** and **replacement** fields interactively.  
 Press `Enter` to confirm and apply the renaming operation.
 
-### Keybindings
+### Keys
 
-| Key        | Action                          |
-|------------|---------------------------------|
-| `Tab`      | Switch between pattern and replacement fields |
-| `Ctrl-N`   | Scroll down the preview list    |
-| `Ctrl-P`   | Scroll up the preview list      |
-| `Ctrl-E`   | Insert a pair of parentheses `()` |
-| `Ctrl-H`   | Expand the capture range to the left |
-| `Ctrl-L`   | Expand the capture range to the right |
+| Key          | Action                                        |
+|--------------|-----------------------------------------------|
+| `Tab`        | Switch between pattern and replacement fields |
+| `Ctrl-N`     | Scroll down the preview list                  |
+| `Ctrl-P`     | Scroll up the preview list                    |
+| `Ctrl-E`     | Insert a pair of parentheses `()`             |
+| `Ctrl-H`     | Expand the capture range to the left          |
+| `Ctrl-L`     | Expand the capture range to the right         |
+| `Ctrl-X/Q/C` | Cancel                                        |
 
 ### Regex rule
 
+The regex is implemented by Odin's regex package. [Regex Rule](https://pkg.odin-lang.org/core/text/regex/)
 
 ## Build
 

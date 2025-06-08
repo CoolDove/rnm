@@ -98,7 +98,6 @@ main :: proc() {
 
 	current_edit = &ed_pattern
 
-	running := true
 	strings.builder_init(&msg); defer strings.builder_destroy(&msg)
 
 	hdir, err := os.open(os.get_current_directory(context.temp_allocator))
@@ -110,6 +109,8 @@ main :: proc() {
 	}
 
 	draw()
+	endcmd := EndCmd.Cancel
+	running := true
 	for running {
 		free_all(context.temp_allocator)
 		{
@@ -200,6 +201,10 @@ main :: proc() {
 					if char == CTRL_Q || char == CTRL_X || char == CTRL_C {
 						running = false
 						break
+					} else if char == ENTER {
+						endcmd = .Perform
+						running = false
+						break
 					} else if char == BKSPC {// backspace
 						edit.delete_to(current_edit, .Left)
 					} else if char == CTRL_U {
@@ -255,7 +260,7 @@ main :: proc() {
 					} else if char == TAB {// TAB
 						switch_edit()
 					} else {
-						// set_msgf("invisible char: %d", char)
+						set_msgf("invisible char: %d", char)
 					}
 				}
 			}
@@ -263,7 +268,33 @@ main :: proc() {
 		update_elements()
 		draw()
 	}
+	{
+		// flush
+		fmt.printf("\x1b[4B")
+		for i in 0..<HEIGHT {
+			fmt.print(ERASE_LINE)
+			fmt.print('\n')
+		}
+		fmt.printf("\x1b[{}A", HEIGHT)
+	}
+	if endcmd == .Perform {
+		sum : int
+		for e in elements {
+			if e.matched {
+				to := strings.to_string(e.result)
+				os.rename(e.file, to)
+				fmt.printf("rename: \x1b[31m{}\x1b[39m -> \x1b[32m{}\x1b[39m\n", e.file, to)
+				sum += 1
+			}
+		}
+		fmt.printf("renamed \x1b[33m{}\x1b[39m files.\n", sum)
+	} else if endcmd == .Cancel {
+		fmt.print("cancelled")
+	}
 	console_end()
+}
+EndCmd :: enum {
+	Cancel, Perform
 }
 
 switch_edit :: proc() {
@@ -362,7 +393,7 @@ update_elements :: proc() {
 				e.capture = capture
 				// ** replace
 				sb := &e.result
-				strings.builder_init(sb)//; defer strings.builder_destroy(&sb)
+				strings.builder_init(sb)
 				replace_str := strings.to_string(ed_replace.builder^)
 				idx := 0
 				for idx<len(replace_str) {
@@ -428,6 +459,7 @@ CTRL_H :rune: 'H' - 0x40
 CTRL_L :rune: 'L' - 0x40
 
 TAB :rune: 9
+ENTER :rune: 13
 
 CTRL_E :rune: 'E' - 0x40
 

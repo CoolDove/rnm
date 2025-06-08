@@ -111,6 +111,7 @@ main :: proc() {
 	draw()
 	endcmd := EndCmd.Cancel
 	running := true
+	string_dirty, visual_dirty := true, true
 	for running {
 		free_all(context.temp_allocator)
 		{
@@ -171,32 +172,42 @@ main :: proc() {
 				escape := string(v.buffer[:v.length])
 				if escape == "\x1b[3~" {// delete
 					edit.delete_to(current_edit, .Right)
+					visual_dirty = true
 				} else if escape == "\x1b" {
 					// nothing
-				} else {
-					set_msgf("ansi escape: {} ({})", string(escape[1:]), escape)
 				}
+				// else {
+				// 	set_msgf("ansi escape: {} ({})", string(escape[1:]), escape)
+				// }
 			case InputEventKey:
 				kinput := v
 				if kinput.vk == win32.VK_LEFT && kinput.mod == 0 {
 					edit.move_to(current_edit, .Left)
+					visual_dirty = true
 				} else if kinput.vk == win32.VK_RIGHT && kinput.mod == 0 {
 					edit.move_to(current_edit, .Right)
+					visual_dirty = true
 				} else if kinput.vk == win32.VK_LEFT && kinput.mod == 1 {
 					edit.move_to(current_edit, .Word_Left)
+					visual_dirty = true
 				} else if kinput.vk == win32.VK_RIGHT && kinput.mod == 1 {
 					edit.move_to(current_edit, .Word_Right)
+					visual_dirty = true
 				} else if kinput.vk == win32.VK_HOME && kinput.mod == 0 {
 					edit.move_to(current_edit, .Start)
+					visual_dirty = true
 				} else if kinput.vk == win32.VK_END && kinput.mod == 0 {
 					edit.move_to(current_edit, .End)
+					visual_dirty = true
 				} else if (kinput.vk == win32.VK_UP || kinput.vk == win32.VK_DOWN) && kinput.mod == 0 {
 					switch_edit()
+					visual_dirty = true
 				}
 			case InputEventChar:
 				char := v
 				if char > 31 && char < 127 {
 					edit.input_rune(current_edit, char)
+					string_dirty = true
 				} else {
 					if char == CTRL_Q || char == CTRL_X || char == CTRL_C {
 						running = false
@@ -207,19 +218,26 @@ main :: proc() {
 						break
 					} else if char == BKSPC {// backspace
 						edit.delete_to(current_edit, .Left)
+						string_dirty = true
 					} else if char == CTRL_U {
 						edit.delete_to(current_edit, .Start)
+						string_dirty = true
 					} else if char == CTRL_K {
 						edit.delete_to(current_edit, .End)
+						string_dirty = true
 					} else if char == CTRL_W {
 						edit.delete_to(current_edit, .Word_Left)
+						string_dirty = true
 					} else if char == CTRL_Z {
 						edit.perform_command(current_edit, .Undo)
+						string_dirty = true
 					} else if char == CTRL_Y {
 						edit.perform_command(current_edit, .Redo)
+						string_dirty = true
 					} else if char == CTRL_E {
 						edit.input_text(current_edit, "()")
 						edit.move_to(current_edit, .Left)
+						string_dirty = true
 					} else if char == CTRL_H {
 						str := strings.to_string(current_edit.builder^)
 						succ : bool
@@ -239,6 +257,7 @@ main :: proc() {
 							edit.move_to(current_edit, .Left)
 							edit.move_to(current_edit, .Left)
 						}
+						string_dirty = true
 					} else if char == CTRL_L {
 						str := strings.to_string(current_edit.builder^)
 						succ : bool
@@ -257,26 +276,23 @@ main :: proc() {
 							edit.input_text(current_edit, "()")
 							edit.move_to(current_edit, .Left)
 						}
+						string_dirty = true
 					} else if char == TAB {// TAB
 						switch_edit()
+						visual_dirty = true
 					} else {
 						set_msgf("invisible char: %d", char)
+						visual_dirty = true
 					}
 				}
 			}
 		}
-		update_elements()
-		draw()
+		if string_dirty do update_elements()
+		if visual_dirty || string_dirty do draw()
+		visual_dirty = false
+		string_dirty = false
 	}
-	{
-		// flush
-		fmt.printf("\x1b[4B")
-		for i in 0..<HEIGHT {
-			fmt.print(ERASE_LINE)
-			fmt.print('\n')
-		}
-		fmt.printf("\x1b[{}A", HEIGHT)
-	}
+	draw_flush()
 	if endcmd == .Perform {
 		sum : int
 		for e in elements {
@@ -306,6 +322,14 @@ switch_edit :: proc() {
 	}
 }
 
+draw_flush :: proc() {
+	fmt.printf("\x1b[4B")
+	for i in 0..<HEIGHT {
+		fmt.print(ERASE_LINE)
+		fmt.print('\n')
+	}
+	fmt.printf("\x1b[{}A", HEIGHT)
+}
 draw :: proc() {
 	input := strings.to_string(sb_pattern)
 

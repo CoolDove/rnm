@@ -2,7 +2,7 @@
 
 **rnm** is a small terminal-based tool for batch renaming files using regular expressions, with interactive TUI.
 It is written in [Odin Lang](https://odin-lang.org/) and currently supports **Windows only**.  
-Other platforms' support is planned for the future.
+Other platforms' support is planned in the future.
 
 ## Usage
 

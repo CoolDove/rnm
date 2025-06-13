@@ -278,7 +278,7 @@ main :: proc() {
 							edit.move_to(current_edit, .Left)
 							edit.move_to(current_edit, .Left)
 						}
-
+						string_dirty = true
 					} else if char == CTRL_L {
 						str := strings.to_string(current_edit.builder^)
 						succ : bool

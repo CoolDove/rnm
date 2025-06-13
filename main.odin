@@ -1,5 +1,6 @@
 package main
 
+import "base:runtime"
 import "core:strings"
 import "core:fmt"
 import "core:mem"
@@ -65,6 +66,9 @@ Element :: struct {
 	matched : bool,
 	result : strings.Builder,
 	capture : regex.Capture,
+
+	// --- for post-process
+	repeat_idx : int,
 }
 
 view_offset : int
@@ -189,7 +193,7 @@ main :: proc() {
 				escape := string(v.buffer[:v.length])
 				if escape == "\x1b[3~" {// delete
 					edit.delete_to(current_edit, .Right)
-					visual_dirty = true
+					string_dirty = true
 				} else if escape == "\x1b" {
 					// nothing
 				}
@@ -274,7 +278,7 @@ main :: proc() {
 							edit.move_to(current_edit, .Left)
 							edit.move_to(current_edit, .Left)
 						}
-						string_dirty = true
+
 					} else if char == CTRL_L {
 						str := strings.to_string(current_edit.builder^)
 						succ : bool
@@ -433,8 +437,17 @@ update_elements :: proc() {
 	regx, regx_err := regex.create(pattern_str, {.Unicode, .Case_Insensitive})
 	defer regex.destroy_regex(regx)
 
+	repeat_map := make_map_cap(map[string]int, len(files)); defer delete(repeat_map)
+
+	RepeatIdxInsert :: struct {
+		file_index : int,
+		infile_position : int,
+		index_index : int, // which insert pos in this file
+	}
+	repeat_idx_insert := make([dynamic]RepeatIdxInsert, 0, len(files)); defer delete(repeat_idx_insert)
+
 	n_matched : int
-	for f in files {
+	for f, fidx in files {
 		matched : bool
 		e : Element
 		e.file = f
@@ -447,40 +460,78 @@ update_elements :: proc() {
 				strings.builder_init(sb)
 				replace_str := strings.to_string(ed_replace.builder^)
 				idx := 0
+
+				repeat_idx_count_in_file := 0
 				for idx<len(replace_str) {
 					using strings
-					replaced : bool
+					ignore_char : bool
 					if replace_str[idx] == '\\' && idx+1<len(replace_str) {
 						d := replace_str[idx+1]
 						if d <= '9' && d > '0' {
 							value := int(d)-48
 							if value < len(capture.groups) {
 								write_string(sb, capture.groups[value])
-								replaced = true
+								ignore_char = true
 								idx += 1
 							}
 						} else if d == '\\' {
 							write_byte(sb, '\\')
 							idx += 1
+						} else if d == 'D' {
+							append(&repeat_idx_insert, RepeatIdxInsert { fidx, strings.builder_len(sb^), repeat_idx_count_in_file })
+							repeat_idx_count_in_file += 1
+							ignore_char = true
+							idx += 1
 						}
 					}
-					if !replaced {
+					if !ignore_char {
 						write_byte(sb, replace_str[idx])
 					}
 					idx += 1
 				}
 
 				n_matched += 1
+
+				result_string := strings.to_string(sb^)
+				if current_repeat_count, ok := repeat_map[result_string]; ok {
+					repeat_map[result_string] = current_repeat_count + 1
+					e.repeat_idx = current_repeat_count
+				} else {
+					repeat_map[result_string] = 1
+					e.repeat_idx = 0
+				}
 			}
 		}
 		append(&elements, e)
 	}
+
+	{// insert repeat index
+		tmp_buffer := scoped_strbdr()
+		idxbuffer : [8]u8
+		for insrt in repeat_idx_insert {
+			elem := &elements[insrt.file_index]
+			repeat_idx := elem.repeat_idx
+			repeat_idx_str := strconv.itoa(idxbuffer[:], repeat_idx)
+			using strings
+			builder_reset(tmp_buffer)
+			insrt_pos := insrt.infile_position + insrt.index_index * len(repeat_idx_str)
+			write_string(tmp_buffer, to_string(elem.result)[insrt_pos:])
+			shrink(&elem.result.buf, insrt_pos)
+			write_string(&elem.result, repeat_idx_str)
+			write_string(&elem.result, to_string(tmp_buffer^))
+		}
+	}
+
 	elem_slice := elements[:]
 	sort.quick_sort_proc(elements[:], 
 		proc(a,b: Element) -> int {
 			if a.matched && !b.matched do return -1
 			else if !a.matched && b.matched do return 1
-			else do return 0
+			else {
+				ext_compare := sort.compare_strings(filepath.long_ext(a.file), filepath.long_ext(b.file))
+				if ext_compare == 0 do return sort.compare_strings(a.file, b.file)
+				return ext_compare
+			}
 		}
 	)
 }

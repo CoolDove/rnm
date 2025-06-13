@@ -1,17 +1,20 @@
 # Rename Man (rnm)
 
-**rnm** is a small terminal-based tool for batch renaming files using regular expressions, with interactive TUI.
-It is written in [Odin Lang](https://odin-lang.org/) and currently supports **Windows only**.  
+**rnm** is a small tool to batch rename files with regular expressions in TUI.
+It is written in [Odin Lang](https://odin-lang.org/) and currently supports **Windows only**.
 Other platforms' support is planned in the future.
 
 ## Usage
 
-You can then edit the **regex pattern** and **replacement** fields interactively.  
-Press `Enter` to confirm and apply the renaming operation.
+![usage](.pictures/usage.gif)
+
+Edit the **regex pattern** and **replacement** fields interactively.
+Then press `Enter` to apply the operation.
 
 In replacement string, use `\1`, `\2`, `\3`... to apply the capture.
+Also, you can use `\D` to insert auto index among repeated results.
 
-![usage](usage.gif)
+![usage_repeat_indexing](.pictures/usage_repeat_indexing.png)
 
 ### Keys
 

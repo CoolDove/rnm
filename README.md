@@ -42,10 +42,10 @@ odin build .
 
 ## TODO
 
-- Support on linux and mac
-X Auto index repeated filenames
-- Copy and Paste
-- Format captured string before insert
-- Insert file date and time
-- Single-file renaming mode
-- Command: confirm and don't exit
+[ ] Support on linux and mac
+[X] Auto index repeated filenames
+[ ] Copy and Paste
+[ ] Format captured string before insert
+[ ] Insert file date and time
+[ ] Single-file renaming mode
+[ ] Command: confirm and don't exit

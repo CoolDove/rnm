@@ -7,6 +7,7 @@ import "core:mem"
 import "core:sort"
 import "core:os"
 import "core:strconv"
+import "core:thread"
 import "core:math"
 import "core:text/regex"
 import "core:text/edit"
@@ -56,6 +57,9 @@ set_msgf :: proc(fmtstr: string, args: ..any, location := #caller_location) {
 	else do strings.write_string(&msg, fmtstr)
 	strings.write_string(&msg, fmt.tprintf("\t\x1b[34m{}\x1b[39m", location))
 }
+
+
+file_collector : DynamicFileCollector
 
 files : [dynamic]string
 
@@ -116,20 +120,35 @@ main :: proc() {
 
 	strings.builder_init(&msg); defer strings.builder_destroy(&msg)
 
-	hdir, err := os.open(os.get_current_directory(context.temp_allocator))
-	fis, rdir_err := os.read_dir(hdir, 0)
-	for fi in fis do if !fi.is_dir do append(&files, fi.name)
-	defer {
-		for fi in fis do os.file_info_delete(fi)
-		delete(fis)
-	}
+	files = make_dynamic_array([dynamic]string); defer delete(files)
+
+	// hdir, err := os.open(os.get_current_directory(context.temp_allocator))
+	// fis, rdir_err := os.read_dir(hdir, 0)
+	// for fi in fis do if !fi.is_dir do append(&files, fi.name)
+	// defer {
+	// 	for fi in fis do os.file_info_delete(fi)
+	// 	delete(fis)
+	// }
+	file_collect_init(&file_collector, 0.1)
+	file_collect_begin(&file_collector)
 
 	draw()
 	endcmd := EndCmd.Cancel
 	running := true
-	string_dirty, visual_dirty := true, true
+	string_dirty, files_dirty, visual_dirty := true, true, true
 	for running {
 		free_all(context.temp_allocator)
+
+		count := file_collect_pull(&file_collector)
+		if count > 0 {
+			// files_dirty = true
+			// start := len(files)
+			// for i in 0..<count {
+			// 	new_file := file_collector.files[start + i]
+			// 	append(&files, new_file)
+			// }
+		}
+
 		{
 			n_events : win32.DWORD
 			events : [32]win32.INPUT_RECORD
@@ -316,7 +335,7 @@ main :: proc() {
 				}
 			}
 		}
-		if string_dirty {
+		if string_dirty || files_dirty {
 			update_elements()
 			view_offset = 0
 		}
@@ -511,7 +530,7 @@ update_elements :: proc() {
 		for insrt in repeat_idx_insert {
 			elem := &elements[insrt.file_index]
 			repeat_idx := elem.repeat_idx
-			repeat_idx_str := strconv.itoa(idxbuffer[:], repeat_idx)
+			repeat_idx_str := strconv.write_int(idxbuffer[:], cast(i64)repeat_idx, 10)
 			using strings
 			builder_reset(tmp_buffer)
 			insrt_pos := insrt.infile_position + insrt.index_index * len(repeat_idx_str)
@@ -549,6 +568,7 @@ clear_elements :: proc() {
 ESC :: 0x1b
 
 CTRL_C :rune: 'C' - 0x40
+CTRL_V :rune: 'V' - 0x40
 CTRL_X :rune: 'X' - 0x40
 CTRL_Q :rune: 'Q' - 0x40
 CTRL_W :rune: 'W' - 0x40
